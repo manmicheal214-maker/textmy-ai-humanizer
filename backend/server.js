@@ -6,6 +6,8 @@ const { rateLimit } = require("./rate-limiter");
 const { rewriteText } = require("./semantic-rewriter");
 
 const app = express();
+// The API runs behind a platform proxy (Render/Vercel/Cloudflare); trust the first proxy so req.ip resolves to the client IP for rate limiting.
+app.set("trust proxy", 1);
 const PORT = Number(process.env.PORT || 3000);
 const MAX_CHARS = Number(process.env.MAX_INPUT_CHARS || 20000);
 const allowedOrigin = process.env.ALLOWED_ORIGIN || "http://localhost:5500";
@@ -23,7 +25,6 @@ app.post("/api/rewrite", rateLimit, async (req, res) => {
     if (typeof text !== "string" || !text.trim()) return res.status(400).json({ error: "Please enter some text first." });
     if (text.length > MAX_CHARS) return res.status(413).json({ error: "The text is too long. Please shorten it and try again." });
     if (!new Set(["light", "balanced", "strong"]).has(intensity)) return res.status(400).json({ error: "Invalid rewrite intensity." });
-
     console.info("request received");
     const rewritten = await rewriteText(text, intensity);
     console.info("request completed");
