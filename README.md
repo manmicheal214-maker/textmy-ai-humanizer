@@ -1,17 +1,39 @@
 # TextMy AI Humanizer
 
-A semantic rewriting and readability tool. It uses an Express backend to call Gemini while keeping the API key out of the browser.
+A semantic rewriting and readability tool. The GitHub Pages frontend calls a separate Express backend, which calls Gemini without exposing the API key to the browser.
+
+## Current layout
+
+```text
+frontend/                  # deployed to GitHub Pages
+  index.html
+  app.js
+  semantic-client.js
+  style.css
+backend/                   # deployed separately as a Node service
+  server.js
+  semantic-rewriter.js
+  rate-limiter.js
+  package.json
+  .env.example
+.github/workflows/
+  deploy-pages.yml
+```
+
+There is no longer an active root-level `index.html` or `app.js`. The old regex-based browser humanizer is not part of the deployed application.
 
 ## Features
 
 - Semantic rewriting with meaning-preservation rules
 - Light, Balanced, and Strong rewrite intensity
+- Word-level in-browser diff after a successful rewrite
 - Responsive dark/light UI
 - Word and character counts
 - Copy and clear actions
 - Server-side API key protection
-- CORS, Helmet, input limits, and IP-based rate limiting
+- CORS, Helmet, input limits, retry/backoff, and IP-based rate limiting
 - No application database and no full user-text logging
+- Review-before-publishing disclaimer
 
 ## Architecture
 
@@ -19,45 +41,30 @@ A semantic rewriting and readability tool. It uses an Express backend to call Ge
 GitHub Pages frontend → Express backend → Gemini API
 ```
 
-The frontend is static and can be deployed to GitHub Pages. The backend must run separately on a Node-compatible service such as Render, Vercel, Cloudflare Workers (with an adapter), or another server platform.
+The frontend is published from `frontend/` by `.github/workflows/deploy-pages.yml`. The backend must run separately on a Node-compatible service.
 
-## Local setup
-
-### Backend
+## Backend setup
 
 ```bash
 cd backend
 npm install
 cp .env.example .env
-```
-
-Set `GEMINI_API_KEY` in `.env`. Do not commit `.env`.
-
-Start the API:
-
-```bash
 npm start
 ```
 
-Health check: `http://localhost:3000/api/health`
+Set `GEMINI_API_KEY` in `.env`. Never commit `.env` or put the key in frontend files.
 
-### Frontend
+Health check:
 
-Because the frontend is static, serve `frontend/` with a local HTTP server. For example:
-
-```bash
-cd frontend
-python3 -m http.server 5500
+```text
+GET /api/health
 ```
 
-The included client defaults to `http://localhost:3000/api`. For a deployed backend, define `window.TEXTMY_API_URL` before `semantic-client.js` loads, for example in `frontend/index.html`:
+Expected response:
 
-```html
-<script>window.TEXTMY_API_URL = "https://your-backend.example.com/api";</script>
-<script src="semantic-client.js"></script>
+```json
+{ "status": "ok" }
 ```
-
-Set the backend `ALLOWED_ORIGIN` to the exact frontend origin.
 
 ## Environment variables
 
@@ -70,9 +77,21 @@ RATE_LIMIT_PER_MINUTE=10
 MAX_INPUT_CHARS=20000
 ```
 
-## API
+For production, set `ALLOWED_ORIGIN` to the exact GitHub Pages origin.
 
-`GET /api/health` returns `{ "status": "ok" }`.
+## Frontend configuration
+
+`frontend/index.html` contains this deployment placeholder immediately before the client loads:
+
+```html
+<script>window.TEXTMY_API_URL = "https://REPLACE_WITH_BACKEND_URL/api";</script>
+```
+
+**This placeholder must be replaced with the real public backend URL before the site can perform rewrites.** The API key must remain on the backend.
+
+The GitHub Pages workflow deploys the `frontend/` directory automatically on pushes to `main`.
+
+## API
 
 `POST /api/rewrite` accepts:
 
@@ -82,9 +101,7 @@ MAX_INPUT_CHARS=20000
 
 Valid intensity values are `light`, `balanced`, and `strong`.
 
-## GitHub Pages deployment
-
-Publish the `frontend/` directory with GitHub Pages. GitHub Pages cannot safely host the Gemini API key, so the backend must be deployed separately. Configure `window.TEXTMY_API_URL` to point to the backend `/api` endpoint and configure backend CORS with the GitHub Pages origin.
+Transient Gemini `429` and `5xx` responses receive one retry after a 500ms backoff. The frontend receives the same generic temporary-unavailable error after retries are exhausted.
 
 ## Security and privacy
 
@@ -92,15 +109,24 @@ Publish the `frontend/` directory with GitHub Pages. GitHub Pages cannot safely 
 - `.env` is ignored by Git.
 - The server does not intentionally log complete user text.
 - The application does not persist input or output in a database.
-- Request size and request frequency are limited.
-- Only the configured frontend origin is accepted by CORS.
+- Request size and frequency are limited.
+- Express trusts the first deployment proxy so `req.ip` can be used for per-client rate limiting.
 - AI provider failures are returned as safe, generic messages.
 - Users should not submit confidential information unless they are comfortable with the configured provider's data policies.
 
-## Limitations
+## Known limitations
 
-AI rewriting can occasionally change meaning, so review output before publishing. The tool does not guarantee AI-detector results. Free API quotas and network/provider availability can affect rewriting quality and availability.
+- **Rate limiting is per-instance and in-memory.** If the backend is scaled to multiple instances, each instance has its own bucket, so limits are not globally shared. A shared store such as Redis would be needed for centralized production rate limiting.
+- AI rewriting can occasionally change meaning, so review output before publishing.
+- The tool does not guarantee AI-detector results.
+- Gemini quotas, model availability, network conditions, and provider outages can affect availability.
+- The word-level diff is intentionally lightweight and computed entirely in the browser; it is not a semantic diff.
 
-## Important implementation note
+## Local frontend
 
-Deterministic rules are intentionally kept out of the semantic path. Regex can handle safe cleanup, but contextual rewriting is delegated to the semantic model so it can account for negation, qualifications, context, and paragraph meaning.
+```bash
+cd frontend
+python3 -m http.server 5500
+```
+
+The local frontend expects the backend at `http://localhost:3000/api` only if you change the deployment placeholder to that local URL. For production, use the real public backend URL.
