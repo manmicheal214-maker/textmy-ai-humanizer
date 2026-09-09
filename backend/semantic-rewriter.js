@@ -22,30 +22,48 @@ STRICT RULES:
 
 Improve sentence variety, natural phrasing, readability, transitions, clarity, conciseness, paragraph flow, and unnecessary repetition. Avoid inflated vocabulary, generic filler, repetitive sentence openings, excessive formal language, and formulaic conclusions.`;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function rewriteText(text, intensity = "balanced") {
   if (!process.env.GEMINI_API_KEY) throw new Error("AI service is not configured.");
   const prompt = `${SYSTEM_PROMPT}\n\nREWRITE INTENSITY:\n${intensityInstructions[intensity] || intensityInstructions.balanced}\n\nUSER TEXT:\n${text}`;
 
-  const response = await fetch(`${API_URL}?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: intensity === "strong" ? 0.8 : 0.65, topP: 0.9, maxOutputTokens: 8192 }
-    })
-  });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(`${API_URL}?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { temperature: intensity === "strong" ? 0.8 : 0.65, topP: 0.9, maxOutputTokens: 8192 }
+        })
+      });
+    } catch (error) {
+      if (attempt === 0) { await sleep(500); continue; }
+      throw error;
+    }
 
-  if (!response.ok) {
+    if (response.ok) {
+      const data = await response.json();
+      const output = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+      if (!output) throw new Error("The rewriting service returned no usable text.");
+      return output;
+    }
+
+    const retryable = response.status === 429 || response.status >= 500;
+    if (retryable && attempt === 0) {
+      await sleep(500);
+      continue;
+    }
+
     let detail = "";
     try { detail = (await response.json())?.error?.message || ""; } catch {}
     console.error("Gemini request failed:", response.status, detail.slice(0, 160));
     throw new Error("The rewriting service is temporarily unavailable.");
   }
 
-  const data = await response.json();
-  const output = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
-  if (!output) throw new Error("The rewriting service returned no usable text.");
-  return output;
+  throw new Error("The rewriting service is temporarily unavailable.");
 }
 
 module.exports = { rewriteText };
