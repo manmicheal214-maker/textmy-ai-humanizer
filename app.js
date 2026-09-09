@@ -1,5 +1,7 @@
 class TextHumanizer {
     constructor() {
+        // Conservative substitutions: the goal is clearer, more natural prose,
+        // not mechanically changing every occurrence of a word.
         this.phraseReplacements = [
             [/\bFurthermore\b/gi, "Also"],
             [/\bMoreover\b/gi, "Also"],
@@ -22,213 +24,158 @@ class TextHumanizer {
             [/\bMultifaceted\b/gi, "Complex"]
         ];
 
-        /*
-         * A conservative dictionary of common passive participles.
-         * We only transform constructions we can reasonably understand.
-         */
-        this.irregulars = {
-            written: "write",
-            made: "make",
-            built: "build",
-            taken: "take",
-            given: "give",
-            seen: "see",
-            known: "know",
-            found: "find",
-            chosen: "choose",
-            broken: "break",
-            driven: "drive",
-            eaten: "eat",
-            spoken: "speak",
-            stolen: "steal",
-            thrown: "throw",
-            drawn: "draw",
-            sent: "send",
-            spent: "spend",
-            kept: "keep",
-            left: "leave",
-            brought: "bring",
-            bought: "buy",
-            taught: "teach",
-            thought: "think",
-            caught: "catch",
-            sold: "sell"
+        // Irregular participles used only when a passive construction is safe to rewrite.
+        this.participles = {
+            written: "write", made: "make", built: "build", taken: "take",
+            given: "give", seen: "see", known: "know", found: "find",
+            chosen: "choose", broken: "break", driven: "drive", eaten: "eat",
+            spoken: "speak", stolen: "steal", thrown: "throw", drawn: "draw",
+            sent: "send", spent: "spend", kept: "keep", left: "leave",
+            brought: "bring", bought: "buy", taught: "teach", thought: "think",
+            caught: "catch", sold: "sell", read: "read',", done: "do",
+            gone: "go", known: "know", shown: "show", grown: "grow",
+            held: "hold", heard: "hear", lost: "lose", paid: "pay",
+            put: "put", run: "run", said: "say", told: "tell", understood: "understand"
         };
+
+        this.irregularPast = {
+            write: "wrote", make: "made", build: "built", take: "took",
+            give: "gave", see: "saw", know: "knew", find: "found",
+            choose: "chose", break: "broke", drive: "drove", eat: "ate",
+            speak: "spoke", steal: "stole", throw: "threw", draw: "drew",
+            send: "sent", spend: "spent", keep: "kept", leave: "left",
+            bring: "brought", buy: "bought", teach: "taught", think: "thought",
+            catch: "caught", sell: "sold", do: "did", go: "went",
+            show: "showed", grow: "grew", hold: "held", hear: "heard",
+            lose: "lost", pay: "paid", put: "put", run: "ran",
+            say: "said", tell: "told", understand: "understood"
+        };
+
+        this.commonTransitions = new Set([
+            "however", "therefore", "also", "overall", "additionally",
+            "moreover", "furthermore", "meanwhile", "instead", "still"
+        ]);
     }
 
     humanize(text) {
-        let result = text;
+        if (!text || !text.trim()) return "";
 
+        let result = text.replace(/\r\n?/g, "\n");
         result = this.cleanPhrases(result);
         result = this.passiveToActive(result);
         result = this.fixRhythm(result);
+        result = this.varyTransitions(result);
         result = this.cleanup(result);
 
         return result;
     }
 
     cleanPhrases(text) {
-        this.phraseReplacements.forEach(([pattern, replacement]) => {
-            text = text.replace(pattern, replacement);
+        return this.applyOutsideProtectedSpans(text, segment => {
+            this.phraseReplacements.forEach(([pattern, replacement]) => {
+                segment = segment.replace(pattern, match =>
+                    this.preserveCase(match, replacement)
+                );
+            });
+            return segment;
         });
-
-        return text;
     }
 
     /*
-     * Conservative passive voice detection.
-     *
-     * Examples:
-     * "The report was written by Sarah."
-     * "The system was built by the team."
-     *
-     * We deliberately avoid attempting complicated sentences.
+     * Only rewrite a passive construction when all of these are clear:
+     * - there is an explicit "by" agent;
+     * - the agent is short enough to be unambiguous;
+     * - the participle is in our known-verb dictionary;
+     * - the construction is simple enough that changing word order won't
+     *   damage the meaning.
      */
     passiveToActive(text) {
-        const pattern =
-            /\b((?:the|a|an)\s+[^.!?;]+?)\s+\b(was|were|is|are|been|being)\s+([a-z]+(?:ed|en|t))\s+by\s+([^.!?;,]+)(?=[.!?]|$)/gi;
+        const sentencePattern = /[^.!?]+(?:[.!?]+|$)/g;
 
-        return text.replace(
-            pattern,
-            (match, object, auxiliary, participle, actor) => {
-                const verb = participle.toLowerCase();
-                const baseVerb = this.toBaseVerb(verb);
+        return text.replace(sentencePattern, sentence => {
+            const match = sentence.match(
+                /^(\s*)((?:the|a|an)\s+[^,;:!?]+?)\s+(was|were|is|are)\s+([a-z]+)\s+by\s+([^,;:!?]+?)([.!?]+)?\s*$/i
+            );
 
-                if (!baseVerb) {
-                    return match;
-                }
+            if (!match) return sentence;
 
-                const tense = /was|were/i.test(auxiliary)
-                    ? "past"
-                    : "present";
+            const [, leading, object, auxiliary, participle, actor, punctuation = ""] = match;
+            const normalizedParticiple = participle.toLowerCase();
+            const baseVerb = this.toBaseVerb(normalizedParticiple);
 
-                const activeVerb = this.toActiveVerb(
-                    baseVerb,
-                    tense,
-                    actor
-                );
+            if (!baseVerb || this.wordCount(actor) > 6) return sentence;
 
-                if (!activeVerb) {
-                    return match;
-                }
+            const tense = /^(was|were)$/i.test(auxiliary) ? "past" : "present";
+            const activeVerb = tense === "past"
+                ? this.toPastTense(baseVerb)
+                : this.toPresentTense(baseVerb, actor);
 
-                const output =
-                    `${actor.trim()} ${activeVerb} ${object.trim()}`;
+            if (!activeVerb) return sentence;
 
-                return this.matchCapitalization(match, output);
-            }
-        );
+            const output = `${actor.trim()} ${activeVerb} ${object.trim()}${punctuation}`;
+            return leading + this.matchCapitalization(sentence.trimStart(), output);
+        });
     }
 
     toBaseVerb(participle) {
-        if (this.irregulars[participle]) {
-            return this.irregulars[participle];
+        if (this.participles[participle]) {
+            // Guard against malformed dictionary entries.
+            return this.participles[participle].replace(/[^a-z]/gi, "");
         }
 
-        /*
-         * Basic -ed handling.
-         *
-         * This intentionally stays conservative rather than trying
-         * to conjugate every English verb.
-         */
+        if (!participle.endsWith("ed")) return null;
+
+        // Common doubled-consonant forms: planned -> plan, stopped -> stop.
+        if (/([a-z])\1ed$/.test(participle)) {
+            return participle.slice(0, -3);
+        }
+
         if (participle.endsWith("ied")) {
             return participle.slice(0, -3) + "y";
         }
 
         if (participle.endsWith("ed")) {
-            return participle.slice(0, -2);
+            const stem = participle.slice(0, -2);
+            if (stem.endsWith("v") || stem.endsWith("c") || stem.endsWith("g") || stem.endsWith("t")) {
+                return stem;
+            }
+            // created -> create, liked -> like, used -> use
+            if (stem.endsWith("at") || stem.endsWith("it") || stem.endsWith("us")) {
+                return stem + "e";
+            }
+            return stem;
         }
 
         return null;
     }
 
-    toActiveVerb(baseVerb, tense, actor) {
-        if (tense === "past") {
-            return this.toPastTense(baseVerb);
-        }
-
-        return this.toPresentTense(baseVerb, actor);
-    }
-
     toPastTense(baseVerb) {
-        const irregularPast = {
-            write: "wrote",
-            make: "made",
-            build: "built",
-            take: "took",
-            give: "gave",
-            see: "saw",
-            know: "knew",
-            find: "found",
-            choose: "chose",
-            break: "broke",
-            drive: "drove",
-            eat: "ate",
-            speak: "spoke",
-            steal: "stole",
-            throw: "threw",
-            draw: "drew",
-            send: "sent",
-            spend: "spent",
-            keep: "kept",
-            leave: "left",
-            bring: "brought",
-            buy: "bought",
-            teach: "taught",
-            think: "thought",
-            catch: "caught",
-            sell: "sold"
-        };
-
-        if (irregularPast[baseVerb]) {
-            return irregularPast[baseVerb];
+        if (this.irregularPast[baseVerb]) return this.irregularPast[baseVerb];
+        if (baseVerb.endsWith("e")) return baseVerb + "d";
+        if (baseVerb.endsWith("y") && !/[aeiou]y$/.test(baseVerb)) {
+            return baseVerb.slice(0, -1) + "ied";
         }
-
-        if (baseVerb.endsWith("e")) {
-            return baseVerb + "d";
-        }
-
         return baseVerb + "ed";
     }
 
     toPresentTense(baseVerb, actor) {
         const actorText = actor.trim().toLowerCase();
-
-        const plural =
+        const plural = /^(the|these|those|some|many|several)\b/.test(actorText) ||
             /\b(they|we|you|i)\b/.test(actorText) ||
             /\band\b/.test(actorText);
 
-        if (plural) {
-            return baseVerb;
-        }
-
-        if (
-            baseVerb.endsWith("s") ||
-            baseVerb.endsWith("x") ||
-            baseVerb.endsWith("ch") ||
-            baseVerb.endsWith("sh")
-        ) {
+        if (plural) return baseVerb;
+        if (baseVerb.endsWith("s") || baseVerb.endsWith("x") || baseVerb.endsWith("ch") || baseVerb.endsWith("sh")) {
             return baseVerb + "es";
         }
-
-        if (baseVerb.endsWith("y")) {
+        if (baseVerb.endsWith("y") && !/[aeiou]y$/.test(baseVerb)) {
             return baseVerb.slice(0, -1) + "ies";
         }
-
         return baseVerb + "s";
     }
 
-    matchCapitalization(original, replacement) {
-        if (/^[A-Z]/.test(original)) {
-            return replacement.charAt(0).toUpperCase() +
-                replacement.slice(1);
-        }
-
-        return replacement;
-    }
-
     fixRhythm(text) {
-        const paragraphs = text.split(/\n+/);
+        const paragraphs = text.split(/\n{2,}/);
 
         return paragraphs
             .map(paragraph => this.processParagraph(paragraph))
@@ -237,122 +184,130 @@ class TextHumanizer {
     }
 
     processParagraph(paragraph) {
-        if (!paragraph.trim()) {
-            return "";
-        }
+        if (!paragraph.trim()) return "";
 
-        const matches =
-            paragraph.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [paragraph];
-
-        let sentences = matches.map(text => ({
+        const sentences = this.splitSentences(paragraph).map(text => ({
             text: text.trim(),
             length: this.wordCount(text)
         }));
 
-        /*
-         * Combine consecutive very short sentences.
-         */
-        for (let i = 0; i < sentences.length - 1; i++) {
+        const merged = [];
+        for (let i = 0; i < sentences.length; i++) {
             const current = sentences[i];
             const next = sentences[i + 1];
 
             if (
-                current.length <= 5 &&
-                next.length <= 5 &&
+                next &&
+                current.length <= 4 &&
+                next.length <= 6 &&
                 !this.looksLikeHeading(current.text) &&
-                !this.looksLikeHeading(next.text)
+                !this.looksLikeHeading(next.text) &&
+                !this.isListItem(current.text) &&
+                !this.isListItem(next.text)
             ) {
                 const first = current.text.replace(/[.!?]+$/, "");
-                const second = next.text
-                    .replace(/^[A-Z]/, char => char.toLowerCase());
-
-                sentences.splice(i, 2, {
-                    text: `${first} — ${second}`,
+                const second = next.text.replace(/^\s+/, "");
+                merged.push({
+                    text: `${first} — ${this.lowercaseFirst(second)}`,
                     length: current.length + next.length
                 });
-
-                i--;
+                i++;
+            } else {
+                merged.push(current);
             }
         }
 
-        /*
-         * Break exceptionally long sentences only when a natural
-         * comma exists around the middle.
-         */
-        for (let i = 0; i < sentences.length; i++) {
-            const sentence = sentences[i];
+        const output = [];
+        merged.forEach(sentence => {
+            const parts = this.splitLongSentence(sentence.text);
+            parts.forEach(part => output.push(part));
+        });
 
-            if (sentence.length < 28) {
-                continue;
+        return output.join(" ").replace(/[ \t]+/g, " ").trim();
+    }
+
+    splitLongSentence(sentence) {
+        if (this.wordCount(sentence) < 32) return [sentence];
+
+        const words = sentence.trim().split(/\s+/);
+        const middle = Math.floor(words.length / 2);
+        const candidates = [];
+
+        for (let i = Math.max(4, middle - 6); i <= Math.min(words.length - 4, middle + 6); i++) {
+            if (/[,:;]/.test(words[i])) {
+                const punctuation = words[i].match(/[,:;]/)[0];
+                const score = punctuation === ";" ? 3 : punctuation === ":" ? 2 : 1;
+                candidates.push({ index: i + 1, score: score - Math.abs(i - middle) * 0.05 });
             }
-
-            const words = sentence.text.split(/\s+/);
-            const middle = Math.floor(words.length / 2);
-
-            let splitAt = -1;
-
-            for (
-                let offset = -4;
-                offset <= 4;
-                offset++
-            ) {
-                const index = middle + offset;
-
-                if (
-                    index > 3 &&
-                    index < words.length - 3 &&
-                    words[index].includes(",")
-                ) {
-                    splitAt = index + 1;
-                    break;
-                }
-            }
-
-            if (splitAt === -1) {
-                continue;
-            }
-
-            let first = words.slice(0, splitAt).join(" ");
-            let second = words.slice(splitAt).join(" ");
-
-            first = first.replace(/[.!?]+$/, "");
-
-            if (!/[.!?]$/.test(first)) {
-                first += ".";
-            }
-
-            second =
-                second.charAt(0).toUpperCase() +
-                second.slice(1);
-
-            sentences.splice(
-                i,
-                1,
-                {
-                    text: first,
-                    length: this.wordCount(first)
-                },
-                {
-                    text: second,
-                    length: this.wordCount(second)
-                }
-            );
-
-            i++;
         }
 
-        return sentences
-            .map(sentence => sentence.text)
-            .join(" ")
-            .replace(/\s+/g, " ")
-            .trim();
+        if (!candidates.length) return [sentence];
+
+        candidates.sort((a, b) => b.score - a.score);
+        const splitAt = candidates[0].index;
+        let first = words.slice(0, splitAt).join(" ");
+        let second = words.slice(splitAt).join(" ");
+
+        if (!first.endsWith(".")) first += ".";
+        second = this.capitalizeFirst(second);
+
+        return [first, second];
+    }
+
+    varyTransitions(text) {
+        // Avoid repeatedly stacking the same formal transition at the start of sentences.
+        const seen = new Map();
+        return this.applyOutsideProtectedSpans(text, segment => {
+            return segment.replace(/(^|[.!?]\s+)([A-Za-z][^.!?]{0,80}?)(?=\s|,)/g, (match, prefix, firstPart) => {
+                const key = firstPart.trim().toLowerCase().replace(/,$/, "");
+                if (!this.commonTransitions.has(key)) return match;
+
+                const count = seen.get(key) || 0;
+                seen.set(key, count + 1);
+
+                if (count === 0) return match;
+                if (key === "furthermore" || key === "moreover" || key === "additionally") {
+                    return prefix + this.lowercaseFirst(firstPart.replace(/,$/, "")) + ",";
+                }
+                return match;
+            });
+        });
+    }
+
+    splitSentences(text) {
+        // Protect decimal numbers, initials, URLs and common abbreviations before splitting.
+        const protectedTokens = [];
+        const protectedText = text.replace(
+            /(?:https?:\/\/\S+|www\.\S+|\b\d+\.\d+\b|\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|e\.g|i\.e|etc)\.)/gi,
+            match => {
+                const token = `__PROTECTED_${protectedTokens.length}__`;
+                protectedTokens.push(match);
+                return token;
+            }
+        );
+
+        const parts = protectedText.match(/[^.!?]+(?:[.!?]+|$)/g) || [protectedText];
+        return parts.map(part => part.replace(/__PROTECTED_(\d+)__/g, (_, index) => protectedTokens[Number(index)]));
+    }
+
+    applyOutsideProtectedSpans(text, callback) {
+        const protectedSpans = [];
+        const masked = text.replace(/```[\s\S]*?```|`[^`]*`|https?:\/\/\S+/g, match => {
+            const token = `__SPAN_${protectedSpans.length}__`;
+            protectedSpans.push(match);
+            return token;
+        });
+
+        const processed = callback(masked);
+        return processed.replace(/__SPAN_(\d+)__/g, (_, index) => protectedSpans[Number(index)]);
     }
 
     looksLikeHeading(text) {
-        return (
-            text.length < 40 &&
-            !/[.!?]$/.test(text)
-        );
+        return text.length < 60 && !/[.!?]$/.test(text);
+    }
+
+    isListItem(text) {
+        return /^(?:[-*•]|\d+[.)])\s+/.test(text.trim());
     }
 
     wordCount(text) {
@@ -360,15 +315,35 @@ class TextHumanizer {
         return words ? words.length : 0;
     }
 
+    preserveCase(original, replacement) {
+        if (original === original.toUpperCase()) return replacement.toUpperCase();
+        if (/^[A-Z]/.test(original)) return this.capitalizeFirst(replacement);
+        return replacement;
+    }
+
+    matchCapitalization(original, replacement) {
+        if (/^[A-Z]/.test(original)) return this.capitalizeFirst(replacement);
+        return replacement;
+    }
+
+    capitalizeFirst(text) {
+        return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+    }
+
+    lowercaseFirst(text) {
+        return text ? text.charAt(0).toLowerCase() + text.slice(1) : text;
+    }
+
     cleanup(text) {
         return text
             .replace(/[ \t]+/g, " ")
-            .replace(/[ ]+([,.!?;:])/g, "$1")
+            .replace(/\s+([,.!?;:])/g, "$1")
+            .replace(/([.!?]){2,}/g, "$1")
+            .replace(/\n[ \t]+/g, "\n")
             .replace(/\n{3,}/g, "\n\n")
             .trim();
     }
 }
-
 
 // --------------------------------------------------
 // UI
@@ -387,9 +362,7 @@ const humanizer = new TextHumanizer();
 
 function updateCounter(element, counter) {
     const count = element.value.length;
-
-    counter.textContent =
-        `${count.toLocaleString()} characters`;
+    counter.textContent = `${count.toLocaleString()} characters`;
 }
 
 function showStatus(message, type = "default") {
@@ -402,8 +375,7 @@ function showStatus(message, type = "default") {
         warning: "text-yellow-400"
     };
 
-    status.className =
-        `text-center text-sm mt-6 min-h-[20px] ${colors[type]}`;
+    status.className = `text-center text-sm mt-6 min-h-[20px] ${colors[type]}`;
 }
 
 humanizeBtn.addEventListener("click", () => {
@@ -420,22 +392,13 @@ humanizeBtn.addEventListener("click", () => {
         humanizeBtn.textContent = "Rewriting...";
 
         const result = humanizer.humanize(input);
-
         outputText.value = result;
 
         updateCounter(outputText, outputCount);
-
-        showStatus(
-            "Text rewritten successfully.",
-            "success"
-        );
+        showStatus("Text rewritten successfully.", "success");
     } catch (error) {
         console.error(error);
-
-        showStatus(
-            "Something went wrong while processing the text.",
-            "error"
-        );
+        showStatus("Something went wrong while processing the text.", "error");
     } finally {
         humanizeBtn.disabled = false;
         humanizeBtn.textContent = "✨ Rewrite Text";
@@ -456,7 +419,6 @@ copyBtn.addEventListener("click", async () => {
     } catch (error) {
         outputText.select();
         document.execCommand("copy");
-
         showStatus("Copied to clipboard!", "success");
     }
 });
