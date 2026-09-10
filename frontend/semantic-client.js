@@ -1,7 +1,7 @@
 /* Public client only. Never put API keys in this file. */
 (function () {
   const configured = window.TEXTMY_API_URL || "";
-  const API_BASE_URL = configured.replace(/\/$/, "") || "http://localhost:3000/api";
+  const API_BASE_URL = configured.replace(/\/$/, "") || "/api";
   const REQUEST_TIMEOUT_MS = 45000;
 
   async function rewrite(payload) {

@@ -17,6 +17,10 @@ PY
 )"
 fi
 
+if [[ "$API_URL" == /* ]]; then
+  API_URL="http://localhost:3000${API_URL}"
+fi
+
 HEALTH_URL="${API_URL%/}/health"
 REWRITE_URL="${API_URL%/}/rewrite"
 
@@ -60,7 +64,7 @@ preflight_code="$(curl -sS -D "$preflight_headers" -o "$preflight_body" -X OPTIO
   -H 'Access-Control-Request-Headers: content-type' \
   -w '%{http_code}' || true)"
 
-allow_origin="$(awk 'BEGIN{IGNORECASE=1} /^access-control-allow-origin:/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' "$preflight_headers" | tr -d '\r')"
+allow_origin="$(awk 'tolower($0) ~ /^access-control-allow-origin:/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' "$preflight_headers" | tr -d '\r')"
 [[ -n "$allow_origin" ]] || fail "CORS preflight failed: no Access-Control-Allow-Origin header. HTTP $preflight_code."
 [[ "$allow_origin" == "$ORIGIN" ]] || fail "CORS preflight failed: Access-Control-Allow-Origin was '$allow_origin', expected '$ORIGIN'."
 
