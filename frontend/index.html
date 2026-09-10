@@ -29,7 +29,12 @@
     <section class="disclaimer"><strong>Review before publishing.</strong> AI rewriting can occasionally alter meaning. TextMy does not guarantee AI-detector results; it is designed as a natural-language rewriting and readability tool.</section>
   </main>
   <footer class="site-footer"><div class="container footer-inner"><span>TextMy AI Humanizer</span><span>Semantic rewriting · No text storage by this application</span></div></footer>
-  <script>window.TEXTMY_API_URL = "/api";</script>
+  <script>
+    window.TEXTMY_API_URL = "/api";
+    if (typeof location !== "undefined" && location.hostname.endsWith("github.io")) {
+      window.TEXTMY_API_URL = "https://textmy-api.manmicheal214.workers.dev";
+    }
+  </script>
   <script src="semantic-client.js"></script>
   <script src="app.js"></script>
 </body>
